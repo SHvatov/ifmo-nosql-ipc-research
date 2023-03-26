@@ -1,0 +1,10 @@
+Average time between stage "Finished consuming message" and stage "Created random message" is 4.887278714075E10 ns
+Average time between stage "Finished consuming message" and stage "Sending message to Redis" is 9.8534468311E10 ns
+Average time between stage "Sending message to Redis" and stage "Created random message" is 1.591241144721875E10 ns
+Average time between stage "Sending message to Redis" and stage "Sending message to Redis" is 8.1026684891E10 ns
+Average time between stage "Successfully sent message to Redis" and stage "Created random message" is 2.26396364180625E10 ns
+Average time between stage "Successfully sent message to Redis" and stage "Sending message to Redis" is 7.05591016545E10 ns
+Average time between stage "Received message in topic [service_out]" and stage "Created random message" is 3.10186724575625E10 ns
+Average time between stage "Received message in topic [service_out]" and stage "Sending message to Redis" is 8.0685172878E10 ns
+Average time between stage "Received message in topic [service_in]" and stage "Created random message" is 5.16267967184375E10 ns
+Average time between stage "Received message in topic [service_in]" and stage "Sending message to Redis" is 1.011877224E11 ns
