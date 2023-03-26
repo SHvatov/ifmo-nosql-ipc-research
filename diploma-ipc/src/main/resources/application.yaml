@@ -15,15 +15,9 @@ management:
 spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:""}
-  redis:
-    host: ${REDIS_HOST:""}
-    port: ${REDIS_PORT:6379}
 diploma:
   mode: ${APP_MODE}
   mq:
     incoming-topic: ${INCOMING_TOPIC:""}
     outgoing-topic: ${OUTGOING_TOPIC:""}
     group-id: ${GROUP_ID:""}
-  nosql:
-    incoming-topic: ${INCOMING_TOPIC:""}
-    outgoing-topic: ${OUTGOING_TOPIC:""}

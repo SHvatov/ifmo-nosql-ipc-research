@@ -1,6 +1,5 @@
 package com.shvatov.diploma.mq.consumer
 
-import com.shvatov.diploma.annotation.MessageQueueEnabled
 import com.shvatov.diploma.dto.Message
 import com.shvatov.diploma.dto.MessageStatus
 import com.shvatov.diploma.mq.producer.KafkaMessageProducer
@@ -14,7 +13,6 @@ import org.springframework.kafka.support.Acknowledgment
 import org.springframework.stereotype.Component
 
 @Component
-@MessageQueueEnabled
 class KafkaMessageConsumer(
     private val messageRegistry: MessageRegistry,
     private val messageProducer: KafkaMessageProducer

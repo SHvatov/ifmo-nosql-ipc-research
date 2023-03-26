@@ -1,6 +1,5 @@
 package com.shvatov.diploma.mq.producer
 
-import com.shvatov.diploma.annotation.MessageQueueEnabled
 import com.shvatov.diploma.dto.Message
 import com.shvatov.diploma.dto.MessageStatus
 import com.shvatov.diploma.service.MessageProducer
@@ -13,7 +12,6 @@ import org.springframework.stereotype.Component
 import java.util.concurrent.TimeUnit
 
 @Component
-@MessageQueueEnabled
 class KafkaMessageProducer(private val kafkaTemplate: KafkaTemplate<String, Message>) : MessageProducer {
 
     @Value(value = "\${diploma.mq.outgoing-topic}")
