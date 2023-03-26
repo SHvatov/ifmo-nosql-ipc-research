@@ -1,0 +1,21 @@
+server:
+  port: ${APPLICATION_PORT}
+logging:
+  level:
+    com.shvatov: TRACE
+management:
+  server:
+    port: ${ACTUATOR_PORT}
+  endpoints:
+    web:
+      exposure:
+        include: prometheus,health,info,metric
+spring:
+  redis:
+    host: ${REDIS_HOST:""}
+    port: ${REDIS_PORT:6379}
+diploma:
+  mode: ${APP_MODE}
+  nosql:
+    incoming-topic: ${INCOMING_TOPIC:""}
+    outgoing-topic: ${OUTGOING_TOPIC:""}
