@@ -1,6 +1,5 @@
 package com.shvatov.diploma.mq.config
 
-import com.shvatov.diploma.annotation.MessageQueueEnabled
 import com.shvatov.diploma.dto.Message
 import org.apache.kafka.clients.admin.AdminClientConfig
 import org.apache.kafka.clients.admin.NewTopic
@@ -23,7 +22,6 @@ import org.springframework.kafka.support.serializer.JsonSerializer
 
 
 @Configuration
-@MessageQueueEnabled
 class KafkaConfig {
 
     @Value(value = "\${spring.kafka.bootstrap-servers}")
