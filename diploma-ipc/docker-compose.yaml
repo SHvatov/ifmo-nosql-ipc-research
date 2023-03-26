@@ -46,10 +46,8 @@ services:
       ACTUATOR_PORT: 3031
     depends_on:
       - kafka
-      - redis
     links:
       - kafka
-      - redis
     ports:
       - "3030:3030"
       - "3031:3031"
@@ -76,11 +74,9 @@ services:
       ACTUATOR_PORT: 3034
     depends_on:
       - kafka
-      - redis
       - service-a
     links:
       - kafka
-      - redis
     ports:
       - "3033:3033"
       - "3034:3034"
