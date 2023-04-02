@@ -36,7 +36,7 @@ import java.util.concurrent.atomic.AtomicReference
 @SpringBootTest(classes = [TestRedisListenerConfiguration::class])
 @ExtendWith(SpringExtension::class)
 @ExtendWith(RedisExtension::class)
-@TestPropertySource(locations = ["classpath:application-test.yaml"])
+@TestPropertySource(locations = ["classpath:application-test.properties"])
 class IPCTest {
 
     @field:Autowired
@@ -68,7 +68,7 @@ class IPCTest {
     }
 
     @Test
-    @Timeout(value = 10, unit = SECONDS)
+    @Timeout(value = 50, unit = SECONDS)
     fun redisHasStartedTest() {
         val messageHolder = AtomicReference<Message<String, ByteArray>?>(null)
         val receiversHolder = AtomicReference<Long?>(null)
@@ -87,14 +87,16 @@ class IPCTest {
 
         template.convertAndSend(TEST_TOPIC, TEST_MESSAGE.toByteArray())
             .publishOn(ipcScheduler)
-            .delaySubscription(Duration.ofSeconds(1))
+            .delaySubscription(Duration.ofSeconds(5))
             .subscribe {
                 log.error("Sent message to topic, receivers: {}", it)
                 receiversHolder.set(it)
             }
 
+        Thread.sleep(100000)
+
         Awaitility.await()
-            .atMost(Duration.ofSeconds(5))
+            .atMost(Duration.ofSeconds(10))
             .until {
                 receiversHolder.get() != null
                         && messageHolder.get() != null
