@@ -1,66 +1,34 @@
 package com.shvatov.redis.ipc.listener
 
-import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration
-import com.shvatov.redis.ipc.extension.RedisExtension
-import com.shvatov.redis.ipc.listener.TestRedisListener.TestRedisListenerConfiguration
-import org.junit.jupiter.api.Assertions.assertNotEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.extension.ExtendWith
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.autoconfigure.SpringBootApplication
-import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
-import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Import
-import org.springframework.data.redis.connection.Message
-import org.springframework.data.redis.core.RedisTemplate
-import org.springframework.data.redis.listener.ChannelTopic
-import org.springframework.data.redis.listener.RedisMessageListenerContainer
-import org.springframework.test.context.TestPropertySource
-import org.springframework.test.context.junit.jupiter.SpringExtension
-import java.util.concurrent.atomic.AtomicReference
+import com.shvatov.redis.ipc.annotation.listener.ChannelName
+import com.shvatov.redis.ipc.annotation.listener.Payload
+import com.shvatov.redis.ipc.annotation.listener.RedisListener
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
+import java.util.concurrent.TimeUnit.MILLISECONDS
 
-@SpringBootTest(classes = [TestRedisListenerConfiguration::class])
-@ExtendWith(SpringExtension::class)
-@ExtendWith(RedisExtension::class)
-@TestPropertySource(locations = ["classpath:application-test.yaml"])
-class TestRedisListener {
 
-    @field:Autowired
-    private lateinit var topic: ChannelTopic
+open class TestRedisListener {
 
-    @field:Autowired
-    private lateinit var template: RedisTemplate<String, ByteArray>
+    data class TestMessage(
+        val id: Long? = null,
+        val payload: String? = null,
+    )
 
-    @field:Autowired
-    private lateinit var messageListenerContainer: RedisMessageListenerContainer
-
-    @SpringBootApplication
-    @Import(value = [RedisIPCAutoConfiguration::class, RedisAutoConfiguration::class])
-    class TestRedisListenerConfiguration {
-
-        @Bean
-        fun topic() = ChannelTopic(TEST_TOPIC)
-
-    }
-
-    @Test
-    fun redisHasStartedTest() {
-        val messageHolder = AtomicReference<Message?>(null)
-        val receiversHolder = AtomicReference<Long>(0)
-
-        messageListenerContainer.addMessageListener({ message, _ -> messageHolder.set(message) }, topic)
-
-        receiversHolder.set(template.convertAndSend(TEST_TOPIC, TEST_MESSAGE.toByteArray()))
-
-        assertNotEquals(0, receiversHolder.get())
-        assertNotNull(messageHolder.get())
+    @RedisListener(
+        channelPatterns = ["\${app.test-channel-pattern}"],
+        channels = ["channel-1", "channel-2", "test_topic"],
+        bufferSize = 10,
+        bufferingDuration = 500,
+        bufferingDurationUnit = MILLISECONDS,
+        retries = 5
+    )
+    fun onMessage(@ChannelName channel: String, @Payload(payloadClass = String::class) message: List<String>) {
+        logger.error("Processing following message from channel {}: {}", channel, message)
+        throw UnsupportedOperationException()
     }
 
     private companion object {
-        const val TEST_TOPIC = "test_topic"
-        const val TEST_MESSAGE = "test_message"
+        val logger: Logger = LoggerFactory.getLogger(TestRedisListener::class.java)
     }
-
 }
