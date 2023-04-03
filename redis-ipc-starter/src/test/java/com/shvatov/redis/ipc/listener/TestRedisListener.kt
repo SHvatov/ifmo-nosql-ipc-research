@@ -25,7 +25,6 @@ open class TestRedisListener {
     )
     fun onMessage(@ChannelName channel: String, @Payload(payloadClass = String::class) message: List<String>) {
         logger.error("Processing following message from channel {}: {}", channel, message)
-        throw UnsupportedOperationException()
     }
 
     private companion object {
