@@ -14,6 +14,9 @@ import org.reactivestreams.Subscription
 import org.reflections.Reflections
 import org.reflections.scanners.MethodAnnotationsScanner
 import org.reflections.util.ConfigurationBuilder
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.BeanInitializationException
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.beans.factory.InitializingBean
 import org.springframework.beans.factory.config.BeanDefinition
@@ -61,36 +64,33 @@ internal class RedisListenerBeanDefinitionRegistrar(
     }
 
     private fun doRegisterRedisListeners(registry: BeanDefinitionRegistry) {
-        val processedClasses = Collections.synchronizedSet(HashSet<Class<*>>())
+        val processedListenerClasses = Collections.synchronizedSet(HashSet<Class<*>>())
         reflections.getMethodsAnnotatedWith(RedisListener::class.java).forEach { method ->
-            doRegisterRedisListener(method, processedClasses, registry)
+            val listenerClass = method.declaringClass
+            if (!processedListenerClasses.add(listenerClass)) {
+                throw BeanInitializationException(
+                    "Found multiple listeners declared in the same class " +
+                            listenerClass.simpleName
+                )
+            }
+            doRegisterRedisListener(method, registry)
         }
     }
 
-    private fun doRegisterRedisListener(
-        method: Method,
-        processedClasses: MutableSet<Class<*>>,
-        registry: BeanDefinitionRegistry
-    ) {
-        val declaringClass = method.declaringClass
-        if (!processedClasses.add(declaringClass)) {
-            throw IllegalStateException(
-                "Found multiple listeners declared in the same class " +
-                        declaringClass.simpleName
-            )
-        }
+    private fun doRegisterRedisListener(method: Method, registry: BeanDefinitionRegistry) {
+        log.trace(
+            "Registering Redis listener based on the method {}#{}",
+            method.declaringClass.simpleName, method.name
+        )
 
         val config = resolveListenerConfig(method)
-        val listenerClass = createListenerClass(declaringClass, config)
-        registerBeanDefinition(registry, listenerClass, config)
+        val listenerProxyClass = createListenerProxyClass(config)
+        registerListenerProxyBean(registry, listenerProxyClass, config)
     }
 
-    private fun createListenerClass(
-        declaringClass: Class<*>,
-        config: RedisListenerConfig
-    ): Class<*> {
+    private fun createListenerProxyClass(config: RedisListenerConfig): Class<*> {
         val helper = RedisListenerHelper(config)
-        return byteBuddy.subclass(declaringClass)
+        return byteBuddy.subclass(config.listenerClass)
             .implement(RedisListenerProxy::class.java)
             .method(isOverriddenFrom(ApplicationContextAware::class.java))
             .intercept(InvocationHandlerAdapter.of { obj, _, args -> helper.init(obj, args[0] as ApplicationContext) })
@@ -105,62 +105,94 @@ internal class RedisListenerBeanDefinitionRegistrar(
 
     private fun resolveListenerConfig(method: Method): RedisListenerConfig {
         val annotation: RedisListener = method.getAnnotation(RedisListener::class.java)
-        return RedisListenerConfig(
-            messageListenerMethod = method,
-            messageListenerClass = method.declaringClass,
-            payloadClass = method.parameters
-                .first { it.isAnnotationPresent(Payload::class.java) }
-                .let {
-                    it.getAnnotation(Payload::class.java)
-                        ?.payloadClass
-                        ?.javaObjectType
-                        ?: it.type
-                },
-            channelNameArgumentIsFirst = method.parameters
-                .withIndex()
-                .first { (_, param) -> param.isAnnotationPresent(ChannelName::class.java) }
-                .index == 0,
-            channels = annotation.channels.map { environment.getProperty(it, it) },
-            channelPatterns = annotation.channelPatterns.map { environment.getProperty(it, it) },
-            retries = if (annotation.retriesExpression.isNotBlank()) {
-                environment.getRequiredProperty(annotation.retriesExpression, Int::class.java)
-            } else annotation.retries,
-            retriesBackOffDuration = if (annotation.retriesBackoffDurationExpression.isNotBlank()) {
-                environment.getRequiredProperty(annotation.retriesBackoffDurationExpression, Duration::class.java)
-            } else if (annotation.retriesBackoffDuration > 0) {
-                Duration.of(
-                    annotation.retriesBackoffDuration.toLong(),
-                    annotation.retriesBackoffDurationUnit.toChronoUnit()
-                )
-            } else null,
-            bufferSize = if (annotation.bufferSizeExpression.isNotBlank()) {
-                environment.getRequiredProperty(annotation.bufferSizeExpression, Int::class.java)
-            } else annotation.bufferSize,
-            bufferingDuration = if (annotation.bufferingDurationExpression.isNotBlank()) {
-                environment.getRequiredProperty(annotation.bufferSizeExpression, Duration::class.java)
-            } else if (annotation.bufferingDuration > 0) {
-                Duration.of(
-                    annotation.bufferingDuration.toLong(),
-                    annotation.bufferingDurationUnit.toChronoUnit()
-                )
-            } else null,
-        ).apply { validateListenerConfig() }
-    }
-
-    private fun RedisListenerConfig.validateListenerConfig() {
-        if (channels.isEmpty() && channelPatterns.isEmpty()) {
-            throw IllegalStateException("\"channels\" or \"channelPatterns\" must be not empty!")
+        return with(annotation) {
+            RedisListenerConfig(
+                listenerMethod = method,
+                listenerClass = method.declaringClass,
+                payloadClass = method.payloadClass,
+                channelNameArgumentIsFirst = method.isChannelNameFirstArgument,
+                channels = channels.resolvedFromEnvironment(),
+                channelPatterns = channelPatterns.resolvedFromEnvironment(),
+                retries = actualRetriesNumber,
+                retriesBackOffDuration = actualRetriesBackoffDuration,
+                bufferSize = actualBufferSize,
+                bufferingDuration = actualBufferingDuration,
+            ).apply { validateListenerConfig() }
         }
     }
 
-    private fun registerBeanDefinition(
+    private val Method.payloadClass: Class<*>
+        get() {
+            val payloadArgument = parameters.firstOrNull { it.isAnnotationPresent(Payload::class.java) }
+                ?: throw BeanInitializationException(
+                    "One of the arguments of the listener " +
+                            "method must be annotated with @Payload"
+                )
+            return payloadArgument.getAnnotation(Payload::class.java).payloadClass
+                .takeIf { it != Unit::class }
+                ?.javaObjectType
+                ?: payloadArgument.type
+        }
+
+    private val Method.isChannelNameFirstArgument: Boolean
+        get() {
+            val (index, _) = parameters.withIndex()
+                .firstOrNull { (_, param) -> param.isAnnotationPresent(ChannelName::class.java) }
+                ?: throw BeanInitializationException(
+                    "One of the arguments of the listener " +
+                            "method must be annotated with @ChannelName"
+                )
+            return index == 0
+        }
+
+    private fun Array<String>.resolvedFromEnvironment() =
+        map { environment.getProperty(it, it) }
+            .filter { it.isNotBlank() }
+
+    private val RedisListener.actualRetriesNumber: Int
+        get() = if (retriesExpression.isNotBlank()) {
+            environment.getRequiredProperty(retriesExpression, Int::class.java)
+        } else retries
+
+    private val RedisListener.actualRetriesBackoffDuration: Duration?
+        get() = if (retriesBackoffDurationExpression.isNotBlank()) {
+            environment.getRequiredProperty(retriesBackoffDurationExpression, Duration::class.java)
+        } else if (retriesBackoffDuration > 0) {
+            Duration.of(
+                retriesBackoffDuration.toLong(),
+                retriesBackoffDurationUnit.toChronoUnit()
+            )
+        } else null
+
+    private val RedisListener.actualBufferSize: Int
+        get() = if (bufferSizeExpression.isNotBlank()) {
+            environment.getRequiredProperty(bufferSizeExpression, Int::class.java)
+        } else bufferSize
+
+    private val RedisListener.actualBufferingDuration: Duration?
+        get() = if (bufferingDurationExpression.isNotBlank()) {
+            environment.getRequiredProperty(bufferSizeExpression, Duration::class.java)
+        } else if (bufferingDuration > 0) {
+            Duration.of(
+                bufferingDuration.toLong(),
+                bufferingDurationUnit.toChronoUnit()
+            )
+        } else null
+
+    private fun RedisListenerConfig.validateListenerConfig() {
+        if (channels.isEmpty() && channelPatterns.isEmpty()) {
+            throw BeanInitializationException("\"channels\" or \"channelPatterns\" must be not empty")
+        }
+    }
+
+    private fun registerListenerProxyBean(
         registry: BeanDefinitionRegistry,
-        listenerClass: Class<*>,
+        listenerProxyClass: Class<*>,
         config: RedisListenerConfig
     ) {
         val beanDefinition = GenericBeanDefinition()
             .apply {
-                setBeanClass(listenerClass)
+                setBeanClass(listenerProxyClass)
                 setDependsOn(
                     REDIS_IPC_MESSAGE_LISTENER_CONTAINER_BEAN,
                     REDIS_IPC_OBJECT_MAPPER_BEAN,
@@ -168,7 +200,7 @@ internal class RedisListenerBeanDefinitionRegistrar(
                 )
                 scope = BeanDefinition.SCOPE_SINGLETON
             }
-        registry.registerBeanDefinition(IPC_LISTENER_PREFIX + config.messageListenerClass.simpleName, beanDefinition)
+        registry.registerBeanDefinition(IPC_LISTENER_PREFIX + config.listenerClass.simpleName, beanDefinition)
     }
 
     internal interface RedisListenerProxy : ApplicationContextAware, InitializingBean, DisposableBean
@@ -184,6 +216,8 @@ internal class RedisListenerBeanDefinitionRegistrar(
         private val subscription = AtomicReference<Subscription?>(null)
 
         fun init(originalListener: Any, applicationContext: ApplicationContext) {
+            log.trace("Initializing RedisListenerHelper for {}", config.listenerClass.simpleName)
+
             this.originalListener = originalListener
 
             listenerContainer = applicationContext.getBean(
@@ -199,8 +233,15 @@ internal class RedisListenerBeanDefinitionRegistrar(
         fun subscribe() {
             val topics = config.channels.map { ChannelTopic(it) } +
                     config.channelPatterns.map { PatternTopic(it) }
+
+            val listenerClassName = config.listenerClass.simpleName
+            val listenerMethodName = config.listenerMethod.name
+
+            log.trace("Subscribing to topics {} in {}", topics, listenerClassName)
+
             val listener = listenerContainer.receive(topics, fromSerializer(string()), fromSerializer(byteArray()))
                 .publishOn(scheduler)
+                .doOnNext { log.trace("Received message {} in {}", it, listenerClassName) }
                 .map {
                     val payload = when {
                         config.payloadClass.isAssignableFrom(ByteArray::class.java) -> it.message
@@ -228,58 +269,67 @@ internal class RedisListenerBeanDefinitionRegistrar(
                 }
             } else listener
 
+            extendedListener = extendedListener.doOnNext {
+                log.trace("Deserialized message(s) {} in {}", it, listenerClassName)
+            }
+
             extendedListener = extendedListener.flatMap {
-                when (it) {
-                    is RedisMessage -> {
-                        val arguments = if (config.channelNameArgumentIsFirst) {
-                            arrayOf(it.channelName, it.payload)
-                        } else arrayOf(it.payload, it.channelName)
+                val arguments = when (it) {
+                    is RedisMessage -> if (config.channelNameArgumentIsFirst) {
+                        arrayOf(it.channelName, it.payload)
+                    } else arrayOf(it.payload, it.channelName)
 
-                        val processor = Flux.just(it)
-                            .publishOn(scheduler)
-                            .map { config.messageListenerMethod.invoke(originalListener, *arguments) }
-                        if (config.retries > 0) {
-                            if (config.retriesBackOffDuration != null) {
-                                processor.retryWhen(
-                                    RetrySpec.backoff(
-                                        config.retries.toLong(),
-                                        config.retriesBackOffDuration
-                                    )
-                                )
-                            } else processor.retryWhen(RetrySpec.max(config.retries.toLong()))
-                        } else processor
-                    }
+                    is RedisMessages -> if (config.channelNameArgumentIsFirst) {
+                        arrayOf(it.channelName, it.payloads)
+                    } else arrayOf(it.payloads, it.channelName)
 
-                    is RedisMessages -> {
-                        val arguments = if (config.channelNameArgumentIsFirst) {
-                            arrayOf(it.channelName, it.payloads)
-                        } else arrayOf(it.payloads, it.channelName)
-
-                        val processor = Flux.just(it)
-                            .publishOn(scheduler)
-                            .map { config.messageListenerMethod.invoke(originalListener, *arguments) }
-                        if (config.retries > 0) {
-                            if (config.retriesBackOffDuration != null) {
-                                processor.retryWhen(
-                                    RetrySpec.backoff(
-                                        config.retries.toLong(),
-                                        config.retriesBackOffDuration
-                                    )
-                                )
-                            } else processor.retryWhen(RetrySpec.max(config.retries.toLong()))
-                        } else processor
-                    }
-
-                    else -> Flux.error(UnsupportedOperationException())
+                    else -> throw UnsupportedOperationException("Unknown type of payload " + it::class.java.simpleName)
                 }
+
+                val processor = Flux.just(it)
+                    .publishOn(scheduler)
+                    .doOnNext {
+                        log.trace(
+                            "Executing {}#{} with the following arguments: {}",
+                            listenerClassName, listenerMethodName, arguments
+                        )
+                        config.listenerMethod.invoke(originalListener, *arguments)
+                    }
+                    .doOnError { exception ->
+                        log.error(
+                            "Execution of {}#{} with the following arguments has failed: {}",
+                            listenerClassName, listenerMethodName, arguments, exception
+                        )
+                    }
+
+                if (config.retries > 0) {
+                    if (config.retriesBackOffDuration != null) {
+                        processor.retryWhen(
+                            RetrySpec.backoff(
+                                config.retries.toLong(),
+                                config.retriesBackOffDuration
+                            ).doBeforeRetry {
+                                log.warn(
+                                    "Retrying execution of {}#{} with the following arguments: {}",
+                                    listenerClassName, listenerMethodName, arguments
+                                )
+                            }
+                        )
+                    } else processor.retryWhen(RetrySpec.max(config.retries.toLong()))
+                } else processor
             }
 
             disposable = extendedListener
-                .doOnSubscribe { subscription.set(it) }
+                .doOnError { log.error("Unhandled exception during message processing", it) }
+                .doOnSubscribe {
+                    log.trace("Subscribing to topics {} in {}", topics, listenerClassName)
+                    subscription.set(it)
+                }
                 .subscribe()
         }
 
         fun destroy() {
+            log.trace("Destroying RedisListenerHelper for {}", config.listenerClass.simpleName)
             subscription.get()!!.cancel()
             disposable.dispose()
         }
@@ -287,11 +337,15 @@ internal class RedisListenerBeanDefinitionRegistrar(
         private data class RedisMessage(val channelName: String, val payload: Any)
 
         private data class RedisMessages(val channelName: String, val payloads: List<Any>)
+
+        private companion object {
+            val log: Logger = LoggerFactory.getLogger(RedisListenerHelper::class.java)
+        }
     }
 
     private data class RedisListenerConfig(
-        val messageListenerMethod: Method,
-        val messageListenerClass: Class<*>,
+        val listenerMethod: Method,
+        val listenerClass: Class<*>,
         val payloadClass: Class<*>,
         val channelNameArgumentIsFirst: Boolean,
         val channelPatterns: List<String>,
@@ -307,7 +361,7 @@ internal class RedisListenerBeanDefinitionRegistrar(
         const val IPC_LISTENER_PREFIX = "ipc."
 
         val byteBuddy: ByteBuddy = ByteBuddy()
-//        val log: Logger = LoggerFactory.getLogger("IPCRedis-Listener")
+        val log: Logger = LoggerFactory.getLogger(RedisListenerBeanDefinitionRegistrar::class.java)
     }
 
 }
