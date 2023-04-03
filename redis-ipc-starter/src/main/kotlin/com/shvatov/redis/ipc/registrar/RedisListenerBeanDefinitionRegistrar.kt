@@ -183,6 +183,18 @@ internal class RedisListenerBeanDefinitionRegistrar(
         if (channels.isEmpty() && channelPatterns.isEmpty()) {
             throw BeanInitializationException("\"channels\" or \"channelPatterns\" must be not empty")
         }
+
+        if (bufferSize > 0) {
+            val payloadHolderClass = listenerMethod.parameters
+                .first { it.isAnnotationPresent(Payload::class.java) }
+                .type
+            if (!payloadHolderClass.isAssignableFrom(List::class.java)) {
+                throw BeanInitializationException(
+                    "Type of the parameter annotated with " +
+                            "@Payload must be List if buffering is enabled"
+                )
+            }
+        }
     }
 
     private fun registerListenerProxyBean(
