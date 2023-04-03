@@ -5,6 +5,7 @@ import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisCommonConfigu
 import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisListenerConfiguration
 import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisPublisherConfiguration
 import com.shvatov.redis.ipc.registrar.RedisListenerBeanDefinitionRegistrar
+import com.shvatov.redis.ipc.registrar.RedisTopicsBeanDefinitionRegistrar
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
@@ -37,6 +38,7 @@ import reactor.core.scheduler.Schedulers
 internal class RedisIPCAutoConfiguration {
 
     @Configuration("redis.ipc.common-configuration")
+    @Import(RedisTopicsBeanDefinitionRegistrar::class)
     class RedisCommonConfiguration {
 
         @Bean(REDIS_IPC_TEMPLATE_BEAN)
