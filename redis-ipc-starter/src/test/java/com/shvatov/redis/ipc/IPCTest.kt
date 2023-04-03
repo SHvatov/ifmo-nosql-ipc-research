@@ -16,11 +16,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
 import org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.ReactiveRedisTemplate
-import org.springframework.data.redis.listener.ChannelTopic
-import org.springframework.data.redis.listener.ReactiveRedisMessageListenerContainer
 import org.springframework.test.context.TestPropertySource
 import org.springframework.test.context.junit.jupiter.SpringExtension
 import org.testcontainers.shaded.org.awaitility.Awaitility
@@ -36,13 +33,7 @@ import java.util.concurrent.atomic.AtomicReference
 class IPCTest {
 
     @field:Autowired
-    private lateinit var topic: ChannelTopic
-
-    @field:Autowired
     private lateinit var template: ReactiveRedisTemplate<String, ByteArray>
-
-    @field:Autowired
-    private lateinit var messageListenerContainer: ReactiveRedisMessageListenerContainer
 
     @field:Autowired
     @field:Qualifier(REDIS_IPC_SCHEDULER_BEAN)
@@ -57,9 +48,6 @@ class IPCTest {
         ]
     )
     class TestRedisListenerConfiguration {
-
-        @Bean
-        fun topic() = ChannelTopic(TEST_TOPIC)
 
     }
 
