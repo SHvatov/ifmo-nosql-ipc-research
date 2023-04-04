@@ -16,7 +16,7 @@ open class TestRedisListener {
     )
 
     @RedisListener(
-        channelPatterns = ["\${app.test-channel-pattern}"],
+        channelPatterns = ["app.test-channel-pattern"],
         channels = ["channel-1", "channel-2", "test_topic"],
         bufferSize = 10,
         bufferingDuration = 500,
