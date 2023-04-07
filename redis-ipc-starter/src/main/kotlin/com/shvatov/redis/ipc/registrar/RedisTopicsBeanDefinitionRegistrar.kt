@@ -1,6 +1,6 @@
 package com.shvatov.redis.ipc.registrar
 
-import com.shvatov.redis.ipc.annotation.listener.RedisListener
+import com.shvatov.redis.ipc.annotation.listener.Listener
 import org.reflections.Reflections
 import org.reflections.scanners.MethodAnnotationsScanner
 import org.reflections.util.ConfigurationBuilder
@@ -35,8 +35,8 @@ internal class RedisTopicsBeanDefinitionRegistrar(
 
     override fun registerBeanDefinitions(metadata: AnnotationMetadata, registry: BeanDefinitionRegistry) {
         log.trace("Registering redis listener topics...")
-        reflections.getMethodsAnnotatedWith(RedisListener::class.java).forEach { method ->
-            val annotation = method.getAnnotation(RedisListener::class.java)
+        reflections.getMethodsAnnotatedWith(Listener::class.java).forEach { method ->
+            val annotation = method.getAnnotation(Listener::class.java)
 
             with(annotation) {
                 registerTopics(registry, channels, ChannelTopic::class.java)

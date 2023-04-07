@@ -2,18 +2,14 @@ package com.shvatov.redis.ipc.registrar
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.shvatov.redis.ipc.annotation.listener.ChannelName
+import com.shvatov.redis.ipc.annotation.listener.Listener
 import com.shvatov.redis.ipc.annotation.listener.Payload
-import com.shvatov.redis.ipc.annotation.listener.RedisListener
+import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisCommonConfiguration.Companion.REDIS_IPC_OBJECT_MAPPER_BEAN
 import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisCommonConfiguration.Companion.REDIS_IPC_SCHEDULER_BEAN
 import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisListenerConfiguration.Companion.REDIS_IPC_MESSAGE_LISTENER_CONTAINER_BEAN
-import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisListenerConfiguration.Companion.REDIS_IPC_OBJECT_MAPPER_BEAN
-import net.bytebuddy.ByteBuddy
 import net.bytebuddy.implementation.InvocationHandlerAdapter
 import net.bytebuddy.matcher.ElementMatchers.isOverriddenFrom
 import org.reactivestreams.Subscription
-import org.reflections.Reflections
-import org.reflections.scanners.MethodAnnotationsScanner
-import org.reflections.util.ConfigurationBuilder
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.BeanInitializationException
@@ -24,7 +20,6 @@ import org.springframework.beans.factory.support.BeanDefinitionRegistry
 import org.springframework.beans.factory.support.GenericBeanDefinition
 import org.springframework.context.ApplicationContext
 import org.springframework.context.ApplicationContextAware
-import org.springframework.context.annotation.ImportBeanDefinitionRegistrar
 import org.springframework.core.env.Environment
 import org.springframework.core.type.AnnotationMetadata
 import org.springframework.data.redis.listener.ChannelTopic
@@ -44,20 +39,8 @@ import java.util.Collections
 import java.util.concurrent.atomic.AtomicReference
 
 internal class RedisListenerBeanDefinitionRegistrar(
-    private val environment: Environment
-) : ImportBeanDefinitionRegistrar {
-
-    private val reflections: Reflections = Reflections(
-        ConfigurationBuilder()
-            .forPackages(
-                *environment
-                    .getRequiredProperty(PACKAGES_TO_SCAN_PROPERTY)
-                    .split(",")
-                    .filter { it.isNotBlank() }
-                    .toTypedArray()
-            )
-            .addScanners(MethodAnnotationsScanner())
-    )
+    environment: Environment
+) : AbstractRedisBeanDefinitionRegistrar(environment) {
 
     override fun registerBeanDefinitions(metadata: AnnotationMetadata, registry: BeanDefinitionRegistry) {
         doRegisterRedisListeners(registry)
@@ -65,7 +48,7 @@ internal class RedisListenerBeanDefinitionRegistrar(
 
     private fun doRegisterRedisListeners(registry: BeanDefinitionRegistry) {
         val processedListenerClasses = Collections.synchronizedSet(HashSet<Class<*>>())
-        reflections.getMethodsAnnotatedWith(RedisListener::class.java).forEach { method ->
+        reflections.getMethodsAnnotatedWith(Listener::class.java).forEach { method ->
             val listenerClass = method.declaringClass
             if (!processedListenerClasses.add(listenerClass)) {
                 throw BeanInitializationException(
@@ -104,7 +87,7 @@ internal class RedisListenerBeanDefinitionRegistrar(
     }
 
     private fun resolveListenerConfig(method: Method): RedisListenerConfig {
-        val annotation: RedisListener = method.getAnnotation(RedisListener::class.java)
+        val annotation = method.getAnnotation(Listener::class.java)
         return with(annotation) {
             RedisListenerConfig(
                 listenerMethod = method,
@@ -117,7 +100,7 @@ internal class RedisListenerBeanDefinitionRegistrar(
                 retriesBackOffDuration = actualRetriesBackoffDuration,
                 bufferSize = actualBufferSize,
                 bufferingDuration = actualBufferingDuration,
-            ).apply { validateListenerConfig() }
+            ).apply { validate() }
         }
     }
 
@@ -149,12 +132,12 @@ internal class RedisListenerBeanDefinitionRegistrar(
         map { environment.getProperty(it, it) }
             .filter { it.isNotBlank() }
 
-    private val RedisListener.actualRetriesNumber: Int
+    private val Listener.actualRetriesNumber: Int
         get() = if (retriesExpression.isNotBlank()) {
             environment.getRequiredProperty(retriesExpression, Int::class.java)
         } else retries
 
-    private val RedisListener.actualRetriesBackoffDuration: Duration?
+    private val Listener.actualRetriesBackoffDuration: Duration?
         get() = if (retriesBackoffDurationExpression.isNotBlank()) {
             environment.getRequiredProperty(retriesBackoffDurationExpression, Duration::class.java)
         } else if (retriesBackoffDuration > 0) {
@@ -164,12 +147,12 @@ internal class RedisListenerBeanDefinitionRegistrar(
             )
         } else null
 
-    private val RedisListener.actualBufferSize: Int
+    private val Listener.actualBufferSize: Int
         get() = if (bufferSizeExpression.isNotBlank()) {
             environment.getRequiredProperty(bufferSizeExpression, Int::class.java)
         } else bufferSize
 
-    private val RedisListener.actualBufferingDuration: Duration?
+    private val Listener.actualBufferingDuration: Duration?
         get() = if (bufferingDurationExpression.isNotBlank()) {
             environment.getRequiredProperty(bufferSizeExpression, Duration::class.java)
         } else if (bufferingDuration > 0) {
@@ -179,7 +162,7 @@ internal class RedisListenerBeanDefinitionRegistrar(
             )
         } else null
 
-    private fun RedisListenerConfig.validateListenerConfig() {
+    private fun RedisListenerConfig.validate() {
         if (channels.isEmpty() && channelPatterns.isEmpty()) {
             throw BeanInitializationException("\"channels\" or \"channelPatterns\" must be not empty")
         }
@@ -367,13 +350,5 @@ internal class RedisListenerBeanDefinitionRegistrar(
         val bufferSize: Int,
         val bufferingDuration: Duration?,
     )
-
-    private companion object {
-        const val PACKAGES_TO_SCAN_PROPERTY = "spring.data.redis.ipc.packages-to-scan"
-        const val IPC_LISTENER_PREFIX = "ipc."
-
-        val byteBuddy: ByteBuddy = ByteBuddy()
-        val log: Logger = LoggerFactory.getLogger(RedisListenerBeanDefinitionRegistrar::class.java)
-    }
 
 }

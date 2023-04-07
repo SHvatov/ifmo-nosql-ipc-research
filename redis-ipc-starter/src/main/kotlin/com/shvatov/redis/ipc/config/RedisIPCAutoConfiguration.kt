@@ -5,6 +5,7 @@ import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisCommonConfigu
 import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisListenerConfiguration
 import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisPublisherConfiguration
 import com.shvatov.redis.ipc.registrar.RedisListenerBeanDefinitionRegistrar
+import com.shvatov.redis.ipc.registrar.RedisPublisherBeanDefinitionRegistrar
 import com.shvatov.redis.ipc.registrar.RedisTopicsBeanDefinitionRegistrar
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.AutoConfiguration
@@ -72,11 +73,15 @@ internal class RedisIPCAutoConfiguration {
             }
         )
 
+        @Bean(REDIS_IPC_OBJECT_MAPPER_BEAN)
+        fun redisIpcObjectMapper() = ObjectMapper()
+
         internal companion object {
             private const val IPC_THREAD_POOL_PREFIX = "redis-ipc"
 
             const val REDIS_IPC_TEMPLATE_BEAN = "reactiveRedisIpcTemplate"
             const val REDIS_IPC_SCHEDULER_BEAN = "reactiveRedisIpcScheduler"
+            const val REDIS_IPC_OBJECT_MAPPER_BEAN = "redisIpcObjectMapper"
         }
     }
 
@@ -90,19 +95,14 @@ internal class RedisIPCAutoConfiguration {
             reactiveRedisConnectionFactory: ReactiveRedisConnectionFactory
         ) = ReactiveRedisMessageListenerContainer(reactiveRedisConnectionFactory)
 
-        @Bean(REDIS_IPC_OBJECT_MAPPER_BEAN)
-        fun redisIpcObjectMapper() = ObjectMapper()
-
         internal companion object {
             const val REDIS_IPC_MESSAGE_LISTENER_CONTAINER_BEAN = "reactiveRedisIpcMessageListenerContainer"
-            const val REDIS_IPC_OBJECT_MAPPER_BEAN = "redisIpcObjectMapper"
         }
     }
 
     @DependsOn("redis.ipc.common-configuration")
     @Configuration("redis.ipc.publisher-configuration")
-    class RedisPublisherConfiguration {
-
-    }
+    @Import(RedisPublisherBeanDefinitionRegistrar::class)
+    class RedisPublisherConfiguration
 
 }
