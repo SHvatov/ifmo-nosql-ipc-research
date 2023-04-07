@@ -5,7 +5,7 @@ import java.util.concurrent.TimeUnit.SECONDS
 
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.RUNTIME)
-annotation class RedisListener(
+annotation class Listener(
     // channels
     val channelPatterns: Array<String> = [],
     val channels: Array<String> = [],

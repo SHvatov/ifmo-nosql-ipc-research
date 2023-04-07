@@ -2,7 +2,8 @@ package com.shvatov.redis.ipc.listener
 
 import com.shvatov.redis.ipc.annotation.listener.ChannelName
 import com.shvatov.redis.ipc.annotation.listener.Payload
-import com.shvatov.redis.ipc.annotation.listener.RedisListener
+import com.shvatov.redis.ipc.annotation.listener.Listener
+import com.shvatov.redis.ipc.dto.TestMessage
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit.MILLISECONDS
@@ -10,12 +11,7 @@ import java.util.concurrent.TimeUnit.MILLISECONDS
 
 open class TestRedisListener {
 
-    data class TestMessage(
-        val id: Long? = null,
-        val payload: String? = null,
-    )
-
-    @RedisListener(
+    @Listener(
         channelPatterns = ["app.test-channel-pattern"],
         channels = ["channel-1", "channel-2", "test_topic"],
         bufferSize = 10,
@@ -23,7 +19,10 @@ open class TestRedisListener {
         bufferingDurationUnit = MILLISECONDS,
         retries = 5
     )
-    fun onMessage(@ChannelName channel: String, @Payload(payloadClass = String::class) message: List<String>) {
+    fun onMessage(
+        @ChannelName channel: String,
+        @Payload(payloadClass = TestMessage::class) message: List<TestMessage>
+    ) {
         logger.error("Processing following message from channel {}: {}", channel, message)
     }
 
