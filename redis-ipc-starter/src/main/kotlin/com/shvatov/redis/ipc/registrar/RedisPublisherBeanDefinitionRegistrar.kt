@@ -1,13 +1,26 @@
 package com.shvatov.redis.ipc.registrar
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.shvatov.redis.ipc.annotation.publisher.Publish
 import com.shvatov.redis.ipc.annotation.publisher.Publisher
+import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisCommonConfiguration
+import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisListenerConfiguration
+import net.bytebuddy.implementation.InvocationHandlerAdapter
+import net.bytebuddy.matcher.ElementMatchers
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.BeanInitializationException
+import org.springframework.beans.factory.config.BeanDefinition
 import org.springframework.beans.factory.support.BeanDefinitionRegistry
+import org.springframework.beans.factory.support.GenericBeanDefinition
+import org.springframework.context.ApplicationContext
+import org.springframework.context.ApplicationContextAware
 import org.springframework.core.env.Environment
 import org.springframework.core.type.AnnotationMetadata
+import org.springframework.data.redis.listener.ReactiveRedisMessageListenerContainer
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import reactor.core.scheduler.Scheduler
 import java.lang.reflect.Method
 import java.lang.reflect.ParameterizedType
 import java.time.Duration
@@ -21,19 +34,42 @@ internal class RedisPublisherBeanDefinitionRegistrar(
     }
 
     private fun doRegisterRedisPublishers(registry: BeanDefinitionRegistry) {
-        reflections.getTypesAnnotatedWith(Publisher::class.java).forEach { publisher ->
-            doRegisterRedisPublisher(registry, publisher)
+        reflections.getTypesAnnotatedWith(Publisher::class.java).forEach { publisherClass ->
+            doRegisterRedisPublisher(registry, publisherClass)
         }
     }
 
-    private fun doRegisterRedisPublisher(registry: BeanDefinitionRegistry, publisher: Class<*>) {
-        publisher.publisherMethods.forEach {
-            resolveListenerConfig(it)
-        }
+    private fun doRegisterRedisPublisher(registry: BeanDefinitionRegistry, publisherClass: Class<*>) {
+        val publisherProxyClass = createPublisherProxyClass(publisherClass)
+        registerPublisherProxyBean(registry, publisherProxyClass, publisherClass)
     }
 
-    private val Class<*>.publisherMethods: Collection<Method>
-        get() = methods.filter { it.isAnnotationPresent(Publish::class.java) }
+    private fun createPublisherProxyClass(publisherClass: Class<*>): Class<*> {
+        val publisherClassBuilder = byteBuddy.subclass(publisherClass)
+            .implement(RedisPublisherProxy::class.java)
+
+        val helpers = mutableListOf<RedisPublisherHelper>()
+        publisherClass.publisherMethods.forEach { method ->
+            val config = resolveListenerConfig(method)
+            val helper = RedisPublisherHelper(config)
+            publisherClassBuilder
+                .method(ElementMatchers.`is`(method))
+                .intercept(InvocationHandlerAdapter.of { _, _, args -> helper.send(args) })
+            helpers.add(helper)
+        }
+
+        publisherClassBuilder
+            .method(ElementMatchers.isOverriddenFrom(ApplicationContextAware::class.java))
+            .intercept(InvocationHandlerAdapter.of { _, _, args ->
+                helpers.forEach { helper ->
+                    helper.init(args[0] as ApplicationContext)
+                }
+            })
+
+        return publisherClassBuilder.make()
+            .load(this::class.java.classLoader)
+            .loaded
+    }
 
     private fun resolveListenerConfig(method: Method): RedisPublisherConfig {
         val annotation = method.getAnnotation(Publish::class.java)
@@ -51,6 +87,51 @@ internal class RedisPublisherBeanDefinitionRegistrar(
             ).apply { validate() }
         }
     }
+
+    private fun RedisPublisherConfig.validate() {
+        if (publishRequestToChannel.isBlank()) {
+            throw BeanInitializationException("\"channel\" or \"publishRequestToChannel\" must be not empty")
+        }
+
+        val rsType = publishMethod.returnType
+        if (!(rsType == Mono::class.java || rsType == Flux::class.java)) {
+            throw BeanInitializationException(
+                "Return type of the publisher method must be either Mono or Flux, got "
+                        + rsType.simpleName
+            )
+        }
+
+        if (!(publishMethodReturnsUnit
+                    || publishMethodReturnsReceiversNumber
+                    || publishMethodReturnsSingleResponse
+                    || publishMethodReturnsMultipleResponses)) {
+            throw BeanInitializationException(
+                "Return type of the publisher method must be either Mono<Unit>, Mono<Long>, Mono/Flux<T>, got "
+                        + rsType.simpleName
+            )
+        }
+    }
+
+    private fun registerPublisherProxyBean(
+        registry: BeanDefinitionRegistry,
+        publisherProxyClass: Class<*>,
+        publisherClass: Class<*>
+    ) {
+        val beanDefinition = GenericBeanDefinition()
+            .apply {
+                setBeanClass(publisherProxyClass)
+                setDependsOn(
+                    RedisListenerConfiguration.REDIS_IPC_MESSAGE_LISTENER_CONTAINER_BEAN,
+                    RedisCommonConfiguration.REDIS_IPC_OBJECT_MAPPER_BEAN,
+                    RedisCommonConfiguration.REDIS_IPC_SCHEDULER_BEAN
+                )
+                scope = BeanDefinition.SCOPE_SINGLETON
+            }
+        registry.registerBeanDefinition(IPC_LISTENER_PREFIX + publisherClass.simpleName, beanDefinition)
+    }
+
+    private val Class<*>.publisherMethods: Collection<Method>
+        get() = methods.filter { it.isAnnotationPresent(Publish::class.java) }
 
     private val Publish.actualRetriesNumber: Int
         get() = if (retriesExpression.isNotBlank()) {
@@ -77,27 +158,42 @@ internal class RedisPublisherBeanDefinitionRegistrar(
             )
         } else null
 
-    private fun RedisPublisherConfig.validate() {
-        if (publishRequestToChannel.isBlank()) {
-            throw BeanInitializationException("\"channel\" or \"publishRequestToChannel\" must be not empty")
-        }
+    internal interface RedisPublisherProxy : ApplicationContextAware
 
-        val rsType = publishMethod.returnType
-        if (!(rsType == Mono::class.java || rsType == Flux::class.java)) {
-            throw BeanInitializationException(
-                "Return type of the publisher method must be either Mono or Flux, got "
-                        + rsType.simpleName
+    private class RedisPublisherHelper(private val config: RedisPublisherConfig) {
+        private lateinit var listenerContainer: ReactiveRedisMessageListenerContainer
+        private lateinit var objectMapper: ObjectMapper
+        private lateinit var scheduler: Scheduler
+
+        fun init(applicationContext: ApplicationContext) {
+            log.trace(
+                "Initializing RedisPublisherHelper for {}#{}",
+                config.publishMethod.declaringClass.simpleName,
+                config.publishMethod
+            )
+
+            listenerContainer = applicationContext.getBean(
+                RedisListenerConfiguration.REDIS_IPC_MESSAGE_LISTENER_CONTAINER_BEAN,
+                ReactiveRedisMessageListenerContainer::class.java
+            )
+
+            objectMapper = applicationContext.getBean(
+                RedisCommonConfiguration.REDIS_IPC_OBJECT_MAPPER_BEAN,
+                ObjectMapper::class.java
+            )
+
+            scheduler = applicationContext.getBean(
+                RedisCommonConfiguration.REDIS_IPC_SCHEDULER_BEAN,
+                Scheduler::class.java
             )
         }
 
-        if (!(publishMethodReturnsUnit
-                    || publishMethodReturnsReceiversNumber
-                    || publishMethodReturnsSingleResponse
-                    || publishMethodReturnsMultipleResponses)) {
-            throw BeanInitializationException(
-                "Return type of the publisher method must be either Mono<Unit>, Mono<Long>, Mono/Flux<T>, got "
-                        + rsType.simpleName
-            )
+        fun send(args: Array<out Any>): Any {
+            return Any()
+        }
+
+        private companion object {
+            val log: Logger = LoggerFactory.getLogger(RedisPublisherHelper::class.java)
         }
     }
 
