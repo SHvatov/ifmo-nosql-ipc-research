@@ -104,6 +104,42 @@ internal class RedisListenerBeanDefinitionRegistrar(
         }
     }
 
+    private fun RedisListenerConfig.validate() {
+        if (channels.isEmpty() && channelPatterns.isEmpty()) {
+            throw BeanInitializationException("\"channels\" or \"channelPatterns\" must be not empty")
+        }
+
+        if (bufferSize > 0) {
+            val payloadHolderClass = listenerMethod.parameters
+                .first { it.isAnnotationPresent(Payload::class.java) }
+                .type
+            if (!payloadHolderClass.isAssignableFrom(List::class.java)) {
+                throw BeanInitializationException(
+                    "Type of the parameter annotated with " +
+                            "@Payload must be List if buffering is enabled"
+                )
+            }
+        }
+    }
+
+    private fun registerListenerProxyBean(
+        registry: BeanDefinitionRegistry,
+        listenerProxyClass: Class<*>,
+        config: RedisListenerConfig
+    ) {
+        val beanDefinition = GenericBeanDefinition()
+            .apply {
+                setBeanClass(listenerProxyClass)
+                setDependsOn(
+                    REDIS_IPC_MESSAGE_LISTENER_CONTAINER_BEAN,
+                    REDIS_IPC_OBJECT_MAPPER_BEAN,
+                    REDIS_IPC_SCHEDULER_BEAN
+                )
+                scope = BeanDefinition.SCOPE_SINGLETON
+            }
+        registry.registerBeanDefinition(IPC_LISTENER_PREFIX + config.listenerClass.simpleName, beanDefinition)
+    }
+
     private val Method.payloadClass: Class<*>
         get() {
             val payloadArgument = parameters.firstOrNull { it.isAnnotationPresent(Payload::class.java) }
@@ -161,42 +197,6 @@ internal class RedisListenerBeanDefinitionRegistrar(
                 bufferingDurationUnit.toChronoUnit()
             )
         } else null
-
-    private fun RedisListenerConfig.validate() {
-        if (channels.isEmpty() && channelPatterns.isEmpty()) {
-            throw BeanInitializationException("\"channels\" or \"channelPatterns\" must be not empty")
-        }
-
-        if (bufferSize > 0) {
-            val payloadHolderClass = listenerMethod.parameters
-                .first { it.isAnnotationPresent(Payload::class.java) }
-                .type
-            if (!payloadHolderClass.isAssignableFrom(List::class.java)) {
-                throw BeanInitializationException(
-                    "Type of the parameter annotated with " +
-                            "@Payload must be List if buffering is enabled"
-                )
-            }
-        }
-    }
-
-    private fun registerListenerProxyBean(
-        registry: BeanDefinitionRegistry,
-        listenerProxyClass: Class<*>,
-        config: RedisListenerConfig
-    ) {
-        val beanDefinition = GenericBeanDefinition()
-            .apply {
-                setBeanClass(listenerProxyClass)
-                setDependsOn(
-                    REDIS_IPC_MESSAGE_LISTENER_CONTAINER_BEAN,
-                    REDIS_IPC_OBJECT_MAPPER_BEAN,
-                    REDIS_IPC_SCHEDULER_BEAN
-                )
-                scope = BeanDefinition.SCOPE_SINGLETON
-            }
-        registry.registerBeanDefinition(IPC_LISTENER_PREFIX + config.listenerClass.simpleName, beanDefinition)
-    }
 
     internal interface RedisListenerProxy : ApplicationContextAware, InitializingBean, DisposableBean
 
