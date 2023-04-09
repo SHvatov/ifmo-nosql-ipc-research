@@ -1,6 +1,7 @@
 package com.shvatov.redis.ipc.registrar
 
 import com.shvatov.redis.ipc.annotation.listener.Listener
+import com.shvatov.redis.ipc.annotation.publisher.Publish
 import org.reflections.Reflections
 import org.reflections.scanners.MethodAnnotationsScanner
 import org.reflections.util.ConfigurationBuilder
@@ -34,22 +35,45 @@ internal class RedisTopicsBeanDefinitionRegistrar(
     )
 
     override fun registerBeanDefinitions(metadata: AnnotationMetadata, registry: BeanDefinitionRegistry) {
+        val registeredTopics = Collections.synchronizedSet(HashSet<String>())
+
         log.trace("Registering redis listener topics...")
         reflections.getMethodsAnnotatedWith(Listener::class.java).forEach { method ->
             val annotation = method.getAnnotation(Listener::class.java)
 
             with(annotation) {
-                registerTopics(registry, channels, ChannelTopic::class.java)
-                registerTopics(registry, channelPatterns, PatternTopic::class.java)
+                registerTopics(registry, registeredTopics, channels, ChannelTopic::class.java)
+                registerTopics(registry, registeredTopics, channelPatterns, PatternTopic::class.java)
             }
         }
 
         log.trace("Registering redis publisher topics...")
-        // todo
+        reflections.getMethodsAnnotatedWith(Publish::class.java).forEach { method ->
+            val annotation = method.getAnnotation(Publish::class.java)
+            arrayOf(
+                annotation.channel,
+                annotation.publishRequestToChannel,
+                annotation.receiveResponseFromChannel
+            )
+                .filter { it.isNotBlank() }
+                .takeIf { it.isNotEmpty() }
+                ?.let { channels ->
+                    registerTopics(
+                        registry,
+                        registeredTopics,
+                        channels.toTypedArray(),
+                        ChannelTopic::class.java
+                    )
+                }
+        }
     }
 
-    private fun registerTopics(registry: BeanDefinitionRegistry, topics: Array<String>, topicClass: Class<*>) {
-        val registeredTopics = Collections.synchronizedSet(HashSet<String>())
+    private fun registerTopics(
+        registry: BeanDefinitionRegistry,
+        registeredTopics: MutableSet<String>,
+        topics: Array<String>,
+        topicClass: Class<*>
+    ) {
         topics.resolvedFromEnvironment()
             .forEach { channel ->
                 if (registeredTopics.add(channel)) {
