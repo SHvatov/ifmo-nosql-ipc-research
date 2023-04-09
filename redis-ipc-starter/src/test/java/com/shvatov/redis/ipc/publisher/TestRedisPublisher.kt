@@ -12,8 +12,8 @@ import java.util.concurrent.TimeUnit
 interface TestRedisPublisher {
 
     @Publish(
-        publishRequestToChannel = "test_channel",
-        receiveResponseFromChannel = "test_channel",
+        publishRequestToChannel = "test_channel_in",
+        receiveResponseFromChannel = "test_channel_out",
         awaitAtLeastOneReceiver = true,
         retries = 5,
         retriesBackoffDuration = 5,
@@ -24,8 +24,8 @@ interface TestRedisPublisher {
     fun publishAndAwaitSingleResponse(message: TestMessage): Mono<TestMessage>
 
     @Publish(
-        publishRequestToChannel = "test_channel",
-        receiveResponseFromChannel = "test_channel",
+        publishRequestToChannel = "test_channel_in",
+        receiveResponseFromChannel = "test_channel_out",
         awaitAtLeastOneReceiver = true,
         retries = 5,
         retriesBackoffDuration = 5,
@@ -47,7 +47,7 @@ interface TestRedisPublisher {
     fun publishAndGetReceivers(message: TestMessage): Mono<Long>
 
     @Publish(
-        publishRequestToChannel = "test_channel",
+        publishRequestToChannel = "test_channel_out",
         awaitAtLeastOneReceiver = true,
         retries = 5,
         retriesBackoffDuration = 5,

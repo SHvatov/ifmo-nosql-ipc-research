@@ -1,8 +1,10 @@
 package com.shvatov.redis.ipc.registrar
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.shvatov.redis.ipc.annotation.publisher.CorrelationId
 import com.shvatov.redis.ipc.annotation.publisher.Publish
 import com.shvatov.redis.ipc.annotation.publisher.Publisher
+import com.shvatov.redis.ipc.annotation.publisher.PublisherId
 import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisCommonConfiguration
 import com.shvatov.redis.ipc.config.RedisIPCAutoConfiguration.RedisListenerConfiguration
 import net.bytebuddy.implementation.InvocationHandlerAdapter
@@ -17,14 +19,25 @@ import org.springframework.context.ApplicationContext
 import org.springframework.context.ApplicationContextAware
 import org.springframework.core.env.Environment
 import org.springframework.core.type.AnnotationMetadata
+import org.springframework.data.redis.core.ReactiveRedisTemplate
+import org.springframework.data.redis.listener.ChannelTopic
 import org.springframework.data.redis.listener.ReactiveRedisMessageListenerContainer
+import org.springframework.data.redis.serializer.RedisSerializationContext.SerializationPair.fromSerializer
+import org.springframework.data.redis.serializer.RedisSerializer
+import org.springframework.util.ReflectionUtils
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Scheduler
+import reactor.util.retry.Retry
+import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.ParameterizedType
 import java.time.Duration
 
+// todo:
+// - additional validation
+// - verbose logging
+// - refactoring
 internal class RedisPublisherBeanDefinitionRegistrar(
     environment: Environment
 ) : AbstractRedisBeanDefinitionRegistrar(environment) {
@@ -45,20 +58,20 @@ internal class RedisPublisherBeanDefinitionRegistrar(
     }
 
     private fun createPublisherProxyClass(publisherClass: Class<*>): Class<*> {
-        val publisherClassBuilder = byteBuddy.subclass(publisherClass)
-            .implement(RedisPublisherProxy::class.java)
+        var publisherClassBuilder = byteBuddy.subclass(publisherClass);
+        publisherClassBuilder = publisherClassBuilder.implement(RedisPublisherProxy::class.java)
 
         val helpers = mutableListOf<RedisPublisherHelper>()
         publisherClass.publisherMethods.forEach { method ->
             val config = resolveListenerConfig(method)
             val helper = RedisPublisherHelper(config)
-            publisherClassBuilder
+            publisherClassBuilder = publisherClassBuilder
                 .method(ElementMatchers.`is`(method))
-                .intercept(InvocationHandlerAdapter.of { _, _, args -> helper.send(args) })
+                .intercept(InvocationHandlerAdapter.of { _, _, args -> helper.publish(args) })
             helpers.add(helper)
         }
 
-        publisherClassBuilder
+        publisherClassBuilder = publisherClassBuilder
             .method(ElementMatchers.isOverriddenFrom(ApplicationContextAware::class.java))
             .intercept(InvocationHandlerAdapter.of { _, _, args ->
                 helpers.forEach { helper ->
@@ -79,7 +92,7 @@ internal class RedisPublisherBeanDefinitionRegistrar(
                 publishRequestToChannel = publishRequestToChannel
                     .takeIf { it.isNotBlank() }
                     ?: channel,
-                receiveResponseFromChannel = receiveResponseFromChannel,
+                receiveResponseFromChannel = receiveResponseFromChannel.takeIf { it.isNotBlank() },
                 awaitAtLeastOneReceiver = awaitAtLeastOneReceiver,
                 retries = actualRetriesNumber,
                 retriesBackoffDuration = actualRetriesBackoffDuration,
@@ -93,11 +106,16 @@ internal class RedisPublisherBeanDefinitionRegistrar(
             throw BeanInitializationException("\"channel\" or \"publishRequestToChannel\" must be not empty")
         }
 
-        val rsType = publishMethod.returnType
-        if (!(rsType == Mono::class.java || rsType == Flux::class.java)) {
+        if (!(responsePublisherClass == Mono::class.java || responsePublisherClass == Flux::class.java)) {
             throw BeanInitializationException(
                 "Return type of the publisher method must be either Mono or Flux, got "
-                        + rsType.simpleName
+                        + responsePublisherClass.simpleName
+            )
+        }
+
+        if (awaitAtLeastOneReceiver && retries <= 0) {
+            throw BeanInitializationException(
+                "If \"awaitAtLeastOneReceiver\" = true, then number of retries must be >= 0"
             )
         }
 
@@ -107,8 +125,20 @@ internal class RedisPublisherBeanDefinitionRegistrar(
                     || publishMethodReturnsMultipleResponses)) {
             throw BeanInitializationException(
                 "Return type of the publisher method must be either Mono<Unit>, Mono<Long>, Mono/Flux<T>, got "
-                        + rsType.simpleName
+                        + responsePublisherClass.simpleName
             )
+        }
+
+        if (publishMethodReturnsSingleResponse || publishMethodReturnsMultipleResponses) {
+            requireNotNull(requestCorrelationIdField)
+            requireNotNull(requestPublisherIdField)
+            requireNotNull(responseCorrelationIdField)
+            requireNotNull(responsePublisherIdField)
+            requireNotNull(responseAwaitTimeout)
+
+            if (publishRequestToChannel == receiveResponseFromChannel) {
+                throw BeanInitializationException("Cannot send to the same channel, from which response is expected")
+            }
         }
     }
 
@@ -162,6 +192,7 @@ internal class RedisPublisherBeanDefinitionRegistrar(
 
     private class RedisPublisherHelper(private val config: RedisPublisherConfig) {
         private lateinit var listenerContainer: ReactiveRedisMessageListenerContainer
+        private lateinit var template: ReactiveRedisTemplate<String, ByteArray>
         private lateinit var objectMapper: ObjectMapper
         private lateinit var scheduler: Scheduler
 
@@ -177,6 +208,12 @@ internal class RedisPublisherBeanDefinitionRegistrar(
                 ReactiveRedisMessageListenerContainer::class.java
             )
 
+            @Suppress("UNCHECKED_CAST")
+            template = applicationContext.getBean(
+                RedisCommonConfiguration.REDIS_IPC_TEMPLATE_BEAN,
+                ReactiveRedisTemplate::class.java
+            ) as ReactiveRedisTemplate<String, ByteArray>
+
             objectMapper = applicationContext.getBean(
                 RedisCommonConfiguration.REDIS_IPC_OBJECT_MAPPER_BEAN,
                 ObjectMapper::class.java
@@ -188,8 +225,74 @@ internal class RedisPublisherBeanDefinitionRegistrar(
             )
         }
 
-        fun send(args: Array<out Any>): Any {
-            return Any()
+        fun publish(args: Array<out Any>): Any {
+            val anyPayload = args[0]
+            val payloadBytes: ByteArray = if (anyPayload is ByteArray) {
+                anyPayload
+            } else {
+                objectMapper.writeValueAsBytes(anyPayload)
+            }
+
+            return with(config) {
+                when {
+                    publishMethodReturnsUnit -> publishAsync(payloadBytes).then()
+                    publishMethodReturnsReceiversNumber -> publishAsync(payloadBytes)
+                    publishMethodReturnsSingleResponse -> publishSync(anyPayload, payloadBytes).next()
+                    publishMethodReturnsMultipleResponses -> publishSync(anyPayload, payloadBytes)
+                    else -> throw UnsupportedOperationException("Unsupported publisher operation!")
+                }
+            }
+        }
+
+        private fun publishAsync(payloadBytes: ByteArray): Mono<Long> {
+            return template.convertAndSend(config.publishRequestToChannel, payloadBytes)
+                .map { receivers ->
+                    if (!config.awaitAtLeastOneReceiver || receivers > 0L) {
+                        return@map receivers
+                    }
+                    throw IllegalStateException("Expected at least one receiver, got none")
+                }
+                .let { mono ->
+                    if (config.retries <= 0) {
+                        return@let mono
+                    }
+
+                    return@let mono.retryWhen(
+                        if (config.retriesBackoffDuration != null) {
+                            Retry.backoff(config.retries.toLong(), config.retriesBackoffDuration)
+                        } else {
+                            Retry.maxInARow(config.retries.toLong())
+                        }
+                    )
+                }
+        }
+
+        private fun publishSync(anyPayload: Any, payloadBytes: ByteArray): Flux<out Any> {
+            ReflectionUtils.makeAccessible(config.requestCorrelationIdField!!)
+            ReflectionUtils.makeAccessible(config.requestPublisherIdField!!)
+            ReflectionUtils.makeAccessible(config.responseCorrelationIdField!!)
+            ReflectionUtils.makeAccessible(config.responsePublisherIdField!!)
+
+            val rqCorrelationId = ReflectionUtils.getField(config.requestCorrelationIdField, anyPayload)
+            val rqPublisherId = ReflectionUtils.getField(config.requestPublisherIdField, anyPayload)
+
+            val publisher = publishAsync(payloadBytes)
+            val listener = listenerContainer.receive(
+                listOf(ChannelTopic.of(config.receiveResponseFromChannel!!)),
+                fromSerializer(RedisSerializer.string()),
+                fromSerializer(RedisSerializer.byteArray())
+            )
+                .publishOn(scheduler)
+                .map { objectMapper.readValue(it.message, config.responseClass) }
+                .filter { response ->
+                    val rsCorrelationId = ReflectionUtils.getField(config.responseCorrelationIdField, response)
+                    val rsPublisherId = ReflectionUtils.getField(config.responsePublisherIdField, response)
+
+                    rqCorrelationId == rsCorrelationId
+                            && rqPublisherId != rsPublisherId
+                }
+                .timeout(config.responseAwaitTimeout!!)
+            return publisher.flatMapMany { listener }
         }
 
         private companion object {
@@ -209,13 +312,27 @@ internal class RedisPublisherBeanDefinitionRegistrar(
         val publishMethodReturnType: ParameterizedType =
             publishMethod.genericReturnType as ParameterizedType,
 
+        val requestClass: Class<*> = publishMethod.parameters.first().type,
+
+        val requestCorrelationIdField: Field? = requestClass.declaredFields
+            .firstOrNull { it.isAnnotationPresent(CorrelationId::class.java) },
+        val requestPublisherIdField: Field? = requestClass.declaredFields
+            .firstOrNull { it.isAnnotationPresent(PublisherId::class.java) },
+
+        val responseClass: Class<*> = publishMethodReturnType.actualTypeArguments[0] as Class<*>,
+        val responsePublisherClass: Class<*> = publishMethod.returnType,
+
+        val responseCorrelationIdField: Field? = responseClass.declaredFields
+            .firstOrNull { it.isAnnotationPresent(CorrelationId::class.java) },
+        val responsePublisherIdField: Field? = responseClass.declaredFields
+            .firstOrNull { it.isAnnotationPresent(PublisherId::class.java) },
+
         val publishMethodReturnsUnit: Boolean =
-            publishMethodReturnType.actualTypeArguments[0] == Unit::class.java
-                    || publishMethodReturnType.actualTypeArguments[0] == Void::class.java,
+            responseClass == Unit::class.java
+                    || responseClass == Void::class.java,
 
         val publishMethodReturnsReceiversNumber: Boolean =
-            publishMethodReturnType.actualTypeArguments[0] == Int::class.java
-                    || publishMethodReturnType.actualTypeArguments[0] == Long::class.java,
+            responseClass == Long::class.javaObjectType,
 
         val publishMethodReturnsSingleResponse: Boolean =
             !publishMethodReturnsUnit
@@ -226,8 +343,5 @@ internal class RedisPublisherBeanDefinitionRegistrar(
             !publishMethodReturnsUnit
                     && !publishMethodReturnsReceiversNumber
                     && publishMethod.returnType == Flux::class.java,
-
-        val responseClass: Class<*> = publishMethodReturnType.actualTypeArguments[0] as Class<*>,
-        val responsePublisherClass: Class<*> = publishMethod.returnType
     )
 }
