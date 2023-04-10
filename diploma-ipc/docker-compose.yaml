@@ -26,9 +26,7 @@ services:
       - monitoring
 
   service-a:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: shvatov/ipc-test-application:redis
     environment:
       INCOMING_TOPIC: service_in
       OUTGOING_TOPIC: service_out
@@ -55,9 +53,7 @@ services:
           memory: 1000M
 
   service-b:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: shvatov/ipc-test-application:redis
     environment:
       INCOMING_TOPIC: service_out
       OUTGOING_TOPIC: service_in
