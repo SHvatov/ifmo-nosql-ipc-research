@@ -41,7 +41,7 @@ jobs:
           tags: shvatov/ipc-test-application:kafka
 
       - name: Push Redis-based image
-        if: endsWith(github.ref, '/kafka-ipc')
+        if: endsWith(github.ref, '/redis-ipc')
         uses: docker/build-push-action@v3
         with:
           context: .
