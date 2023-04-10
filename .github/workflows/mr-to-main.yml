@@ -1,4 +1,4 @@
-name: Build and test the code on PR
+name: Build and publish Docker image
 on:
   push:
     branches:
