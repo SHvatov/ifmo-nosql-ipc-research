@@ -19,6 +19,13 @@ jobs:
 
       - name: Setup Maven settings.xml
         uses: s4u/maven-settings-action@v2.3.0
+        with:
+          servers: |
+            [{
+                "id": "github",
+                "username": "${{ secrets.REPO_USERNAME }}",
+                "password": "${{ secrets.REPO_READ_TOKEN }}"
+            }]
 
       - name: Build with Maven
         run: mvn -B package --file ./diploma-ipc/pom.xml
