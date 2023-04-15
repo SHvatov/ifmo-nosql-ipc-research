@@ -1,6 +1,6 @@
 package com.shvatov.diploma.controller
 
-import com.shvatov.diploma.service.MessageProducer
+import com.shvatov.diploma.nosql.producer.RedisMessageProducer
 import com.shvatov.diploma.service.MessageRegistry
 import com.shvatov.diploma.util.logEvent
 import org.slf4j.Logger
@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*
 @RequestMapping("/api")
 class Controller(
     private val messageRegistry: MessageRegistry,
-    private val messageProducer: MessageProducer
+    private val messageProducer: RedisMessageProducer
 ) {
 
     @Lazy
