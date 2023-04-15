@@ -12,7 +12,7 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.context.annotation.Lazy
 
-class RedisMessageConsumer(
+open class RedisMessageConsumer(
     @Lazy private val messageRegistry: MessageRegistry,
     @Lazy private val messageProducer: MessageProducer
 ) {
