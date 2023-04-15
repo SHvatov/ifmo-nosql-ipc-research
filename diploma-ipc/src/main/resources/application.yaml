@@ -1,0 +1,23 @@
+server:
+  port: ${APPLICATION_PORT}
+logging:
+  level:
+    com.shvatov: TRACE
+    org.apache.kafka: INFO
+    org.springframework.kafka: INFO
+management:
+  server:
+    port: ${ACTUATOR_PORT}
+  endpoints:
+    web:
+      exposure:
+        include: prometheus,health,info,metric
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:""}
+diploma:
+  mode: ${APP_MODE}
+  mq:
+    incoming-topic: ${INCOMING_TOPIC:""}
+    outgoing-topic: ${OUTGOING_TOPIC:""}
+    group-id: ${GROUP_ID:""}

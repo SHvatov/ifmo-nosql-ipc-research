@@ -1,0 +1,87 @@
+version: "3.9"
+
+networks:
+  monitoring:
+    driver: bridge
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - monitoring
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+    links:
+      - zookeeper
+    networks:
+      - monitoring
+
+  service-a:
+    image: shvatov/ipc-test-application:kafka
+    environment:
+      INCOMING_TOPIC: service_in
+      OUTGOING_TOPIC: service_out
+      GROUP_ID: service_a
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      APPLICATION_PORT: 3030
+      ACTUATOR_PORT: 3031
+    depends_on:
+      - kafka
+    links:
+      - kafka
+    ports:
+      - "3030:3030"
+      - "3031:3031"
+    networks:
+      - monitoring
+    volumes:
+      - ./data/service_a:/usr/local/lib/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1000M
+
+  service-b:
+    image: shvatov/ipc-test-application:kafka
+    environment:
+      INCOMING_TOPIC: service_out
+      OUTGOING_TOPIC: service_in
+      GROUP_ID: service_b
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      APPLICATION_PORT: 3033
+      ACTUATOR_PORT: 3034
+    depends_on:
+      - kafka
+      - service-a
+    links:
+      - kafka
+    ports:
+      - "3033:3033"
+      - "3034:3034"
+    networks:
+      - monitoring
+    volumes:
+      - ./data/service_b:/usr/local/lib/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1000M
