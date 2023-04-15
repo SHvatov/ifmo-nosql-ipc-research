@@ -1,0 +1,29 @@
+debug: true
+server:
+  port: ${APPLICATION_PORT}
+logging:
+  level:
+    org:
+      springframework: DEBUG
+    com.shvatov: TRACE
+management:
+  server:
+    port: ${ACTUATOR_PORT}
+  endpoints:
+    web:
+      exposure:
+        include: prometheus,health,info,metric
+
+spring:
+  data:
+    redis:
+      ipc:
+        packages-to-scan: com.shvatov
+  redis:
+    host: ${REDIS_HOST:""}
+    port: ${REDIS_PORT:6379}
+diploma:
+  mode: ${APP_MODE}
+  nosql:
+    incoming-topic: ${INCOMING_TOPIC:""}
+    outgoing-topic: ${OUTGOING_TOPIC:""}

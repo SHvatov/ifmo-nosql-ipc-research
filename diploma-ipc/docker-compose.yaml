@@ -1,0 +1,81 @@
+version: "3.9"
+
+networks:
+  monitoring:
+    driver: bridge
+
+services:
+  redis:
+    image: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - monitoring
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    environment:
+      - REDIS_HOSTS=redis
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    links:
+      - redis
+    networks:
+      - monitoring
+
+  service-a:
+    image: shvatov/ipc-test-application:redis
+    environment:
+      INCOMING_TOPIC: service_in
+      OUTGOING_TOPIC: service_out
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      APP_MODE: NOSQL_DATABASE
+      APPLICATION_PORT: 3030
+      ACTUATOR_PORT: 3031
+    depends_on:
+      - redis
+    links:
+      - redis
+    ports:
+      - "3030:3030"
+      - "3031:3031"
+    networks:
+      - monitoring
+    volumes:
+      - ./data/service_a:/usr/local/lib/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1000M
+
+  service-b:
+    image: shvatov/ipc-test-application:redis
+    environment:
+      INCOMING_TOPIC: service_out
+      OUTGOING_TOPIC: service_in
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      APP_MODE: NOSQL_DATABASE
+      APPLICATION_PORT: 3033
+      ACTUATOR_PORT: 3034
+    depends_on:
+      - redis
+      - service-a
+    links:
+      - redis
+    ports:
+      - "3033:3033"
+      - "3034:3034"
+    networks:
+      - monitoring
+    volumes:
+      - ./data/service_b:/usr/local/lib/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1000M
