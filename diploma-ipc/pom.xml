@@ -20,6 +20,14 @@
         <kotlin.version>1.7.22</kotlin.version>
     </properties>
 
+    <repositories>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/shvatov/ifmo-nosql-ipc-starter</url>
+        </repository>
+    </repositories>
+
     <dependencies>
         <dependency>
             <groupId>com.shvatov</groupId>
